@@ -23,7 +23,7 @@ def encode_base58(b: bytes) -> str:
     return '1' * pad + res
 
 def privkey_to_address(privkey_hex: str) -> str:
-    """Derives a legacy address using faster cryptography backend."""
+    """Derives a legacy address using cryptography backend for SHA256 and hashlib for RIPEMD160."""
     privkey_bytes = bytes.fromhex(privkey_hex.zfill(64))
     sk = SigningKey.from_string(privkey_bytes, curve=SECP256k1)
     vk = sk.verifying_key
@@ -34,10 +34,8 @@ def privkey_to_address(privkey_hex: str) -> str:
     digest1.update(pubkey_bytes)
     sha256_bp = digest1.finalize()
     
-    # Fast RIPEMD160
-    digest2 = hashes.Hash(hashes.RIPEMD160())
-    digest2.update(sha256_bp)
-    ripemd160 = digest2.finalize()
+    # Secure and compatible RIPEMD160 using standard hashlib
+    ripemd160 = hashlib.new('ripemd160', sha256_bp).digest()
     
     net_ripemd = b'\x00' + ripemd160
     
@@ -82,11 +80,9 @@ def worker_scan(core_id, start_range, end_range, target_addresses, progress_dict
 def monitor_progress(progress_dict, total_cores):
     """Main thread loop to aggregate and display real-world performance."""
     start_time = time.time()
-    last_total = 0
     
     while True:
         time.sleep(1)
-        # Sum up progress from all running cores
         total_scanned = sum(progress_dict.values())
         elapsed = time.time() - start_time
         
@@ -96,7 +92,6 @@ def monitor_progress(progress_dict, total_cores):
             sys.stdout.flush()
 
 if __name__ == "__main__":
-    # Load target file
     target_addresses = load_funded_addresses("funded_address.txt")
     if not target_addresses:
         sys.exit()
@@ -110,7 +105,6 @@ if __name__ == "__main__":
     total_keyspace = total_end - total_start
     chunk_size = total_keyspace // num_cores
     
-    # Shared dictionary for performance tracking
     manager = multiprocessing.Manager()
     progress_dict = manager.dict()
     for i in range(num_cores):
@@ -118,7 +112,6 @@ if __name__ == "__main__":
         
     processes = []
     for i in range(num_cores):
-        # Calculate unique sub-range for each individual core
         core_start = total_start + (i * chunk_size)
         core_end = core_start + chunk_size if i < num_cores - 1 else total_end
         
@@ -129,7 +122,6 @@ if __name__ == "__main__":
         processes.append(p)
         p.start()
         
-    # Start performance monitor in the main thread
     try:
         monitor_progress(progress_dict, num_cores)
     except KeyboardInterrupt:
