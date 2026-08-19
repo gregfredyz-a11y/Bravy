@@ -23,7 +23,7 @@ def bech32_hrp_expand(hrp):
 
 def bech32_create_checksum(hrp, data):
     values = bech32_hrp_expand(hrp) + data
-    polymod = bech32_polymod(values +) ^ 1
+    polymod = bech32_polymod(values + data) ^ 1  # Fixed the syntax error here
     return [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
 
 def convertbits(data, frombits, tobits, pad=True):
@@ -73,7 +73,6 @@ def encode_base58(b: bytes) -> str:
     return '1' * pad + res
 
 def ripemd160_hash(data_bytes: bytes) -> bytes:
-    """Helper to cleanly route fast hashing with dynamic system library fallback."""
     sha256_bp = hashlib.sha256(data_bytes).digest()
     try:
         return hashlib.new('ripemd160', sha256_bp).digest()
@@ -81,28 +80,20 @@ def ripemd160_hash(data_bytes: bytes) -> bytes:
         return hashlib.sha256(sha256_bp).digest()[:20]
 
 def pubkey_to_legacy_address(pubkey_bytes: bytes) -> str:
-    """Returns address starting with 1"""
     ripemd160 = ripemd160_hash(pubkey_bytes)
     net_ripemd = b'\x00' + ripemd160
     checksum = hashlib.sha256(hashlib.sha256(net_ripemd).digest()).digest()[:4]
     return encode_base58(net_ripemd + checksum)
 
 def pubkey_to_nested_segwit(pubkey_bytes: bytes) -> str:
-    """BIP49: Wraps compressed public key in redeemScript to return address starting with 3"""
     ripemd160 = ripemd160_hash(pubkey_bytes)
-    # 0x0014 is the structural script pattern prefix for Witness Public Key Hash
     redeem_script = b'\x00\x14' + ripemd160 
-    
-    # Hash the script structure itself
     redeem_hash = ripemd160_hash(redeem_script)
-    
-    # 0x05 is the mainnet prefix for P2SH scripts
     net_p2sh = b'\x05' + redeem_hash
     checksum = hashlib.sha256(hashlib.sha256(net_p2sh).digest()).digest()[:4]
     return encode_base58(net_p2sh + checksum)
 
 def pubkey_to_native_segwit(pubkey_bytes: bytes) -> str:
-    """BIP84: Returns address starting with bc1q"""
     ripemd160 = ripemd160_hash(pubkey_bytes)
     return encode_bech32("bc", 0, ripemd160)
 
@@ -143,7 +134,6 @@ if __name__ == "__main__":
     print(f"Loaded {len(target_addresses)} targets from file.")
     print(f"Resuming scanning operations from: {hex(start_point)[:14]}...")
     
-    # Simple upfront prefix check for user visibility
     p2sh_count = sum(1 for a in target_addresses if a.startswith('3'))
     print(f"Target list verification: Found {p2sh_count} Nested SegWit ('3...') entries inside target file.")
     
@@ -160,30 +150,21 @@ if __name__ == "__main__":
             hex_key = hex(current_int)[2:].zfill(64)
             privkey_bytes = bytes.fromhex(hex_key)
             
-            # Fast Native C-Derivation of Public Key Coordinates
             private_key_obj = ec.derive_private_key(int.from_bytes(privkey_bytes, 'big'), ec.SECP256K1())
             pub_numbers = private_key_obj.public_key().public_numbers()
             x_bytes = pub_numbers.x.to_bytes(32, 'big')
             y_bytes = pub_numbers.y.to_bytes(32, 'big')
             
-            # Format 1: Uncompressed Legacy (Starts with 1)
             pub_uncompressed = b'\x04' + x_bytes + y_bytes
             addr_legacy_uncomp = pubkey_to_legacy_address(pub_uncompressed)
             
-            # Setup for Compressed-variant generations
             prefix = b'\x02' if pub_numbers.y % 2 == 0 else b'\x03'
             pub_compressed = prefix + x_bytes
             
-            # Format 2: Compressed Legacy (Starts with 1)
             addr_legacy_comp = pubkey_to_legacy_address(pub_compressed)
-            
-            # Format 3: Nested SegWit / P2SH (Starts with 3)
             addr_nested_segwit = pubkey_to_nested_segwit(pub_compressed)
-            
-            # Format 4: Native SegWit / Bech32 (Starts with bc1q)
             addr_native_segwit = pubkey_to_native_segwit(pub_compressed)
             
-            # Evaluate Derived Addresses
             derived_set = {
                 addr_legacy_uncomp.lower(), 
                 addr_legacy_comp.lower(), 
