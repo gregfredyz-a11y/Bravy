@@ -1,7 +1,7 @@
 import hashlib
 import sys
 import time
-from ecdsa import SigningKey, SECP256k1
+from cryptography.hazmat.primitives.asymmetric import ec
 
 # Base58 encoding characters
 base58_alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -20,27 +20,31 @@ def encode_base58(b: bytes) -> str:
             break
     return '1' * pad + res
 
-def privkey_to_address(privkey_hex: str) -> str:
-    """Fast inline address derivation without heavy framework wrappers."""
+def privkey_to_address_fast(privkey_hex: str) -> str:
+    """Derives a legacy Bitcoin address using native OpenSSL C-bindings via cryptography library."""
+    # Convert hex key directly into numerical private key bytes
     privkey_bytes = bytes.fromhex(privkey_hex.zfill(64))
     
-    # ECDSA Key Derivation
-    sk = SigningKey.from_string(privkey_bytes, curve=SECP256k1)
-    vk = sk.verifying_key
-    pubkey_bytes = b'\x04' + vk.to_string()
+    # Fast Native C-Derivation of Public Key
+    private_key_obj = ec.derive_private_key(int.from_bytes(privkey_bytes, 'big'), ec.SECP256K1())
+    public_key_obj = private_key_obj.public_key()
     
-    # Double Hashing using native standard C-optimized hashlib
+    # Get uncompressed public key bytes (starts with 0x04)
+    pub_numbers = public_key_obj.public_numbers()
+    x_bytes = pub_numbers.x.to_bytes(32, 'big')
+    y_bytes = pub_numbers.y.to_bytes(32, 'big')
+    pubkey_bytes = b'\x04' + x_bytes + y_bytes
+    
+    # Native SHA256 & RIPEMD160 hash execution
     sha256_bp = hashlib.sha256(pubkey_bytes).digest()
-    
     try:
         ripemd160 = hashlib.new('ripemd160', sha256_bp).digest()
     except ValueError:
-        # Fallback if Termux build lacks local openssl ripemd bindings
         ripemd160 = hashlib.sha256(sha256_bp).digest()[:20]
         
     net_ripemd = b'\x00' + ripemd160
     
-    # Checksum calculation
+    # Double SHA256 Checksum
     checksum = hashlib.sha256(hashlib.sha256(net_ripemd).digest()).digest()[:4]
     return encode_base58(net_ripemd + checksum)
 
@@ -58,24 +62,23 @@ if __name__ == "__main__":
         sys.exit()
         
     print(f"Loaded {len(target_addresses)} addresses from file.")
-    print("Running directly in Main Thread to bypass Termux background locks...\n")
+    print("Running with C-accelerated elliptic curve bindings...\n")
     
-    # Range configuration: 2^255 to 2^256-1
+    # Starting at exactly 2^255
     current_int = 2**255
     end_range = 2**256
     
     total_scanned = 0
     start_time = time.time()
     
-    # Performance reporting frequency
-    report_interval = 200
+    # Reduced to 1 to give you an INSTANT visual response on your screen
+    report_interval = 1 
     
     try:
         while current_int < end_range:
             hex_key = hex(current_int)[2:]
-            address = privkey_to_address(hex_key)
+            address = privkey_to_address_fast(hex_key)
             
-            # Instant memory validation against loaded addresses
             if address in target_addresses:
                 print(f"\n[!] MATCH FOUND: {address}")
                 print(f"Private Key (Hex): {hex_key}")
@@ -84,14 +87,18 @@ if __name__ == "__main__":
             
             total_scanned += 1
             
-            # Print update every 200 keys without locking the processor
             if total_scanned % report_interval == 0:
                 elapsed = time.time() - start_time
                 speed = total_scanned / elapsed if elapsed > 0 else 0
                 print(f"Total Scanned: {total_scanned} keys | Speed: {speed:.2f} keys/sec | Current: {hex_key[:12]}...", end="\r")
                 sys.stdout.flush()
                 
+                # After verifying the first 10 keys work, dynamically scale reporting 
+                # interval up to prevent printing operations from slowing down the CPU
+                if total_scanned == 10:
+                    report_interval = 50
+                    
             current_int += 1
             
     except KeyboardInterrupt:
-        print("\nScanning paused safely by user request.")
+        print("\nScanning paused safely.")
